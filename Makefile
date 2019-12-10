@@ -2,21 +2,23 @@
 DIR_SRC=src
 DIR_BIN=bin
 
-GIT_DEPS=glad
+DEPS=glad/include/glad/glad.h
 
 SRCS=$(wildcard ${DIR_SRC}/*.c)
 BINS=$(foreach s,${SRCS},$(subst ${DIR_SRC}/,${DIR_BIN}/,${s:%.c=%}))
 
-all: ${GIT_DEPS} ${BINS}
+INCLUDES=-Iglad/include
 
-${DIR_BIN}/% : ${DIR_SRC}/%.c | ${DIR_BIN} ${GIT_DEPS}
-	gcc $^ -o $@
+all: ${DEPS} ${BINS}
+
+${DIR_BIN}/% : ${DIR_SRC}/%.c ${DEPS} | ${DIR_BIN}
+	gcc $(filter %.c %h,$^) -o $@ ${INCLUDES}
 
 ${DIR_BIN}:
 	mkdir -p $@
 
-glad/include/glad/glad.h : glad
-	cd glad && python __main__.py --generator=c --out-path .
+%/glad.h : glad
+	cd glad && python glad --generator=c --out-path .
 
 glad:
 	git clone https://github.com/Dav1dde/glad
