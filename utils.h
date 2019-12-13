@@ -49,19 +49,38 @@ struct xxWindow {
   struct xxWindow_native native;
 };
 
+bool
+xxwindow_open_get(struct xxWindow * window)
+{
+  return window->open;
+}
+
+void
+xxwindow_open_set(struct xxWindow * window, bool state)
+{
+  mtx_lock(&window->mutex);
+  window->open = state;
+  mtx_unlock(&window->mutex);
+}
+
+
 int
 handler_input(void * data)
 {
   struct xxWindow * window = (struct xxWindow *)data;
-  Display * display = window->native.display;
-  XEvent * event = &window->native.event;
   mtx_lock(&window->mutex);
-  printf("%s\n","INIT FROM THREAD");
   cnd_signal(&window->condition);
-  printf("%s\n","SIGNAL DONE!");
+  mtx_unlock(&window->mutex);
   while (window->open) {
-    XNextEvent(display, event);
-    printf("%s\n","HELLO");
+    XNextEvent(window->native.display, &window->native.event);
+    switch(window->native.event.type) {
+      case(DestroyNotify):
+        xxwindow_open_set(window, false);
+        break;
+      default:
+        printf("Event type %d not matched.\n", window->native.event.type);
+        break;
+    }
   }
   return 0;
 }
@@ -86,7 +105,11 @@ xxwindow_native_create(struct xxWindow * window)
     BlackPixel(native->display, native->screen),
     WhitePixel(native->display, native->screen)
   );
-  XSelectInput(native->display, native->window, ExposureMask | KeyPressMask);
+  XSelectInput(
+    native->display,
+    native->window,
+    ExposureMask | KeyPressMask | StructureNotifyMask
+  );
   XMapWindow(native->display, native->window);
 }
 
@@ -96,21 +119,28 @@ xxwindow_native_destroy(struct xxWindow * window)
   XCloseDisplay(window->native.display);
 }
 
-struct xxWindow
+struct xxWindow *
 xxwindow_get(const char * name, uint32_t width, uint32_t height)
 {
-  struct xxWindow window = {name, width, height, true};
-  xxwindow_native_create(&window);
-  mtx_init(&window.mutex, mtx_plain);
-  cnd_init(&window.condition);
-  thrd_create(&window.thread_input, handler_input, (void *)&window);
-  mtx_lock(&window.mutex);
+  struct xxWindow * window = malloc(sizeof(struct xxWindow));
+
+  window->name = name;
+  window->width = width;
+  window->height = height;
+  window->open = true;
+  window->index_event_first_empty = 0;
+
+  mtx_init(&window->mutex, mtx_plain);
+  cnd_init(&window->condition);
+  xxwindow_native_create(window);
+  mtx_lock(&window->mutex);
+  thrd_create(&window->thread_input, handler_input, (void *)window);
   while (true) {
-    if (cnd_wait(&window.condition, &window.mutex) == thrd_success) {
+    if (cnd_wait(&window->condition, &window->mutex) == thrd_success) {
       break;
     }
   }
-  printf("Window done!\n");
+  mtx_unlock(&window->mutex);
   return window;
 }
 
@@ -138,22 +168,6 @@ xxinput_flush(struct xxWindow * window)
     }
   }
   window->index_event_first_empty = 0;
-  printf("UNLOCKING\n");
-  mtx_unlock(&window->mutex);
-  printf("DONE\n");
-}
-
-bool
-xxwindow_open_get(struct xxWindow * window)
-{
-  return window->open;
-}
-
-void
-xxwindow_open_set(struct xxWindow * window, bool state)
-{
-  mtx_lock(&window->mutex);
-  window->open = state;
   mtx_unlock(&window->mutex);
 }
 
@@ -165,7 +179,9 @@ xxwindow_terminate(struct xxWindow * window)
   }
   thrd_join(window->thread_input, NULL);
   mtx_destroy(&window->mutex);
+  cnd_destroy(&window->condition);
   xxwindow_native_destroy(window);
+  free(window);
 }
 
 
