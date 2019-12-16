@@ -33,10 +33,10 @@ enum XX_KEY {
 };
 
 enum XX_EVENT_TYPE {
+  XX_EVENT_NONE,
   XX_EVENT_WINDOW_CLOSE,
   XX_EVENT_PRESS,
   XX_EVENT_RELEASE,
-  XX_EVENT_HELD,
 };
 
 struct xxWindow_native {
@@ -63,7 +63,6 @@ struct xxWindow {
   struct xxEvent buffer_events[BUFFER_EVENTS_SIZE];
   bool state_keys_released[XX_KEY_SIZE];
   bool state_keys_pressed[XX_KEY_SIZE];
-  bool state_keys_held[XX_KEY_SIZE];
   struct xxWindow_native native;
 };
 
@@ -219,13 +218,9 @@ handler_events(void * data)
     FD_ZERO(&in_fds);
     FD_SET(x11_fd, &in_fds);
 
-    int num_ready_fds = select(x11_fd+1, &in_fds, NULL, NULL, &tv);
-    if (num_ready_fds > 0) {
-      printf("Event Received!\n");
-    } else if (num_ready_fds == 0) {
-      printf("Timer Fired!\n");
-    }
+    select(x11_fd+1, &in_fds, NULL, NULL, &tv);
 
+    enum XX_EVENT_TYPE previous = XX_EVENT_NONE;
     mtx_lock(&window->mutex);
     while(XPending(window->native.display)) {
       XNextEvent(window->native.display, &window->native.event);
@@ -237,19 +232,28 @@ handler_events(void * data)
         window->index_event_first_empty
       ];
       XEvent * event_native = &window->native.event;
-      printf("Event: %s\n", xxinput_event_to_string(event_native));
       switch(event_native->type) {
-        case(DestroyNotify):
+        case DestroyNotify:
           event->key = XX_KEY_NONE;
           event->type = XX_EVENT_WINDOW_CLOSE;
           window->index_event_first_empty++;
           break;
-        case(KeyPress):
-        case(KeyRelease):
+        case KeyPress:
+        case KeyRelease:
           ; // Empty statement.
           XKeyEvent * event_cast = (XKeyEvent *)event_native;
-          event->type = event_cast->type == KeyPress ? XX_EVENT_PRESS : XX_EVENT_RELEASE;
-          printf("Key event with code: %d\n", event_cast->keycode);
+          if (event_cast->type == KeyPress && previous == XX_EVENT_RELEASE) {
+            // Remove the previous release event and skip this one.
+            window->index_event_first_empty--;
+            continue;
+          }
+          event->key = event_cast->keycode;
+          if (event_cast->type == KeyPress) {
+            event->type = XX_EVENT_PRESS;
+          } else {
+            event->type = XX_EVENT_RELEASE;
+          }
+          previous = event->type;
           window->index_event_first_empty++;
           break;
         default:
@@ -288,7 +292,7 @@ xxwindow_native_create(struct xxWindow * window)
   XSelectInput(
     native->display,
     native->window,
-    ExposureMask | KeyPressMask | StructureNotifyMask | \
+    ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask | \
     EnterWindowMask | LeaveWindowMask
   );
   XMapWindow(native->display, native->window);
@@ -333,11 +337,10 @@ xxinput_flush(struct xxWindow * window)
   for (int i=0; i<XX_KEY_SIZE; i++) {
     window->state_keys_released[i] = false;
     window->state_keys_pressed[i] = false;
-    window->state_keys_held[i] = false;
   }
   for (int i=0; i<window->index_event_first_empty; i++) {
-    printf("Processing event buffer index: %d\n", i);
     struct xxEvent * event = &window->buffer_events[i];
+    printf("  [%d]: ", i);
     switch (event->type) {
       case (XX_EVENT_PRESS):
         printf("Pressed.\n");
@@ -347,13 +350,12 @@ xxinput_flush(struct xxWindow * window)
         printf("Released.\n");
         window->state_keys_released[event->key] = true;
         break;
-      case (XX_EVENT_HELD):
-        printf("Held.\n");
-        window->state_keys_held[event->key] = true;
-        break;
       case (XX_EVENT_WINDOW_CLOSE):
         printf("Window Close.\n");
         xxwindow_open_set_locked(window, false);
+        break;
+      case (XX_EVENT_NONE):
+        printf("None event should not be submitted.\n");
         break;
     }
   }
