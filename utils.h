@@ -87,6 +87,114 @@ xxwindow_open_set(struct xxWindow * window, bool state)
   mtx_unlock(&window->mutex);
 }
 
+const char *
+xxinput_event_to_string(XEvent * event)
+{
+  switch (event->type) {
+    case (KeyPress):
+      return "KeyPress";
+      break;
+    case (KeyRelease):
+      return "KeyRelease";
+      break;
+    case (ButtonPress):
+      return "ButtonPress";
+      break;
+    case (ButtonRelease):
+      return "ButtonRelease";
+      break;
+    case (MotionNotify):
+      return "MotionNotify";
+      break;
+    case (EnterNotify):
+      return "EnterNotify";
+      break;
+    case (LeaveNotify):
+      return "LeaveNotify";
+      break;
+    case (FocusIn):
+      return "FocusIn";
+      break;
+    case (FocusOut):
+      return "FocusOut";
+      break;
+    case (KeymapNotify):
+      return "KeymapNotify";
+      break;
+    case (Expose):
+      return "Expose";
+      break;
+    case (GraphicsExpose):
+      return "GraphicsExpose";
+      break;
+    case (NoExpose):
+      return "NoExpose";
+      break;
+    case (CirculateRequest):
+      return "CirculateRequest";
+      break;
+    case (ConfigureRequest):
+      return "ConfigureRequest";
+      break;
+    case (MapRequest):
+      return "MapRequest";
+      break;
+    case (ResizeRequest):
+      return "ResizeRequest";
+      break;
+    case (CirculateNotify):
+      return "CirculateNotify";
+      break;
+    case (ConfigureNotify):
+      return "ConfigureNotify";
+      break;
+    case (CreateNotify):
+      return "CreateNotify";
+      break;
+    case (DestroyNotify):
+      return "DestroyNotify";
+      break;
+    case (GravityNotify):
+      return "GravityNotify";
+      break;
+    case (MapNotify):
+      return "MapNotify";
+      break;
+    case (MappingNotify):
+      return "MappingNotify";
+      break;
+    case (ReparentNotify):
+      return "ReparentNotify";
+      break;
+    case (UnmapNotify):
+      return "UnmapNotify";
+      break;
+    case (VisibilityNotify):
+      return "VisibilityNotify";
+      break;
+    case (ColormapNotify):
+      return "ColormapNotify";
+      break;
+    case (ClientMessage):
+      return "ClientMessage";
+      break;
+    case (PropertyNotify):
+      return "PropertyNotify";
+      break;
+    case (SelectionClear):
+      return "SelectionClear";
+      break;
+    case (SelectionNotify):
+      return "SelectionNotify";
+      break;
+    case (SelectionRequest):
+      return "SelectionRequest";
+      break;
+    default:
+      return "No mapping for event.";
+  }
+}
+
 
 int
 handler_events(void * data)
@@ -100,8 +208,9 @@ handler_events(void * data)
   int x11_fd = ConnectionNumber(window->native.display);
   int keycodes_min, keycodes_max;
   XDisplayKeycodes(window->native.display, &keycodes_min, &keycodes_max);
+  printf("Keycodes: min: %d, max: %d\n", keycodes_min, keycodes_max);
 
-  while (window->open) {
+  for (;;) {
 
     struct timeval tv = {0};
     tv.tv_sec=1;
@@ -111,42 +220,47 @@ handler_events(void * data)
     FD_SET(x11_fd, &in_fds);
 
     int num_ready_fds = select(x11_fd+1, &in_fds, NULL, NULL, &tv);
-    if (num_ready_fds > 1) {
+    if (num_ready_fds > 0) {
       printf("Event Received!\n");
     } else if (num_ready_fds == 0) {
       printf("Timer Fired!\n");
-      continue;
     }
 
-    XNextEvent(window->native.display, &window->native.event);
     mtx_lock(&window->mutex);
-    if (window->index_event_first_empty >= BUFFER_EVENTS_SIZE) {
-      mtx_unlock(&window->mutex);
-      continue;
-    }
-    struct xxEvent * event = &window->buffer_events[
-      window->index_event_first_empty
-    ];
-    XEvent * event_native = &window->native.event;
-    switch(event_native->type) {
-      case(DestroyNotify):
-        event->key = XX_KEY_NONE;
-        event->type = XX_EVENT_WINDOW_CLOSE;
-        window->index_event_first_empty++;
+    while(XPending(window->native.display)) {
+      XNextEvent(window->native.display, &window->native.event);
+      if (window->index_event_first_empty >= BUFFER_EVENTS_SIZE) {
+        mtx_unlock(&window->mutex);
         break;
-      case(KeyPress):
-      case(KeyRelease):
-        ; // Empty statement.
-        XKeyEvent * event_cast = (XKeyEvent *)event_native;
-        event->type = event_cast->type == KeyPress ? XX_EVENT_PRESS : XX_EVENT_RELEASE;
-        printf("Key event with code: %d\n", event_cast->keycode);
-        window->index_event_first_empty++;
-        break;
-      default:
-        printf("Event type %d not matched.\n", window->native.event.type);
-        break;
+      }
+      struct xxEvent * event = &window->buffer_events[
+        window->index_event_first_empty
+      ];
+      XEvent * event_native = &window->native.event;
+      printf("Event: %s\n", xxinput_event_to_string(event_native));
+      switch(event_native->type) {
+        case(DestroyNotify):
+          event->key = XX_KEY_NONE;
+          event->type = XX_EVENT_WINDOW_CLOSE;
+          window->index_event_first_empty++;
+          break;
+        case(KeyPress):
+        case(KeyRelease):
+          ; // Empty statement.
+          XKeyEvent * event_cast = (XKeyEvent *)event_native;
+          event->type = event_cast->type == KeyPress ? XX_EVENT_PRESS : XX_EVENT_RELEASE;
+          printf("Key event with code: %d\n", event_cast->keycode);
+          window->index_event_first_empty++;
+          break;
+        default:
+          printf("Event type %d not matched.\n", window->native.event.type);
+          break;
+      }
     }
     mtx_unlock(&window->mutex);
+    if (!window->open) {
+      break;
+    }
   }
   return 0;
 }
@@ -174,7 +288,8 @@ xxwindow_native_create(struct xxWindow * window)
   XSelectInput(
     native->display,
     native->window,
-    ExposureMask | KeyPressMask | StructureNotifyMask
+    ExposureMask | KeyPressMask | StructureNotifyMask | \
+    EnterWindowMask | LeaveWindowMask
   );
   XMapWindow(native->display, native->window);
   XFlush(native->display);
