@@ -6,7 +6,7 @@ BINS=$(foreach s,${SRCS},$(subst ${DIR_SRC}/,${DIR_BIN}/,${s:%.c=%}))
 
 DEPS=utils.h
 
-FLAGS=-g -Wall -Werror -std=c11 -lpthread -lm -lX11 -ldl -lGL
+FLAGS=-g -Wall -Werror -std=gnu11 -lpthread -lm -lX11 -ldl -lGL
 INCLUDES=-I.
 
 CC=gcc

@@ -1,15 +1,18 @@
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <threads.h>
 #include <sys/select.h>
+#include <time.h>
 
 #include <stdint.h>
 
 #include <X11/Xlib.h>
 
 #define BUFFER_EVENTS_SIZE 64
+
+#define MSEC(t) t.tv_sec*1e3+t.tv_nsec/1e6
 
 /*
 #define mtx_lock_org mtx_lock
@@ -29,8 +32,9 @@
 enum XX_KEY {
   XX_KEY_NONE,
   XX_KEY_ESC,
-  XX_KEY_SIZE,
 };
+
+#define XX_KEY_SIZE 256
 
 enum XX_EVENT_TYPE {
   XX_EVENT_NONE,
@@ -61,6 +65,8 @@ struct xxWindow {
   mtx_t mutex;
   cnd_t condition;
   struct xxEvent buffer_events[BUFFER_EVENTS_SIZE];
+  struct timespec time_last_flush;
+  double state_keys_time[XX_KEY_SIZE];
   bool state_keys_released[XX_KEY_SIZE];
   bool state_keys_pressed[XX_KEY_SIZE];
   struct xxWindow_native native;
@@ -209,6 +215,7 @@ handler_events(void * data)
   XDisplayKeycodes(window->native.display, &keycodes_min, &keycodes_max);
   printf("Keycodes: min: %d, max: %d\n", keycodes_min, keycodes_max);
 
+
   for (;;) {
 
     struct timeval tv = {0};
@@ -315,6 +322,8 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
   window->height = height;
   window->open = true;
   window->index_event_first_empty = 0;
+  window->time_last_flush.tv_sec = 0;
+  window->time_last_flush.tv_nsec = 0;
 
   mtx_init(&window->mutex, mtx_plain);
   cnd_init(&window->condition);
@@ -338,6 +347,19 @@ xxinput_flush(struct xxWindow * window)
     window->state_keys_released[i] = false;
     window->state_keys_pressed[i] = false;
   }
+
+  struct timespec current = {0};
+  double msec_prev = MSEC(window->time_last_flush);
+  clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &current);
+  double msec_curr = MSEC(current);
+  double msec_diff = msec_curr - msec_prev;
+  window->time_last_flush.tv_sec = current.tv_sec;
+  window->time_last_flush.tv_nsec = current.tv_nsec;
+
+  // Add diff to all timers.
+  for (int i=0; i<XX_KEY_SIZE; i++) {
+    window->state_keys_time[i] += msec_diff;
+  }
   for (int i=0; i<window->index_event_first_empty; i++) {
     struct xxEvent * event = &window->buffer_events[i];
     printf("  [%d]: ", i);
@@ -345,10 +367,12 @@ xxinput_flush(struct xxWindow * window)
       case (XX_EVENT_PRESS):
         printf("Pressed.\n");
         window->state_keys_pressed[event->key] = true;
+        window->state_keys_time[event->key] = 0;
         break;
       case (XX_EVENT_RELEASE):
-        printf("Released.\n");
+        printf("Released, held for %f ms.\n", window->state_keys_time[event->key]);
         window->state_keys_released[event->key] = true;
+        window->state_keys_time[event->key] = 0;
         break;
       case (XX_EVENT_WINDOW_CLOSE):
         printf("Window Close.\n");
