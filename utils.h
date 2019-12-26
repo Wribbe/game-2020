@@ -451,3 +451,33 @@ xxinput_released(struct xxWindow * window, enum XX_KEY key)
 {
   return window->state_keys_released[key];
 }
+
+
+char *
+read_file(const char * path, size_t * size_data_ret)
+{
+  FILE * file = fopen(path, "r");
+  if (file == NULL) {
+    printf("%s: %s.\n", strerror(errno), path);
+    return NULL;
+  }
+  fseek(file, 0, SEEK_END);
+  size_t size_data = ftell(file);
+  rewind(file);
+
+  char * data = malloc(size_data+1);
+  if (data == NULL) {
+    printf("Could not allocate enough memory, aborting\n");
+    return NULL;
+  }
+
+  size_t read = 0;
+  while (read < size_data) {
+    read += fread(data, 1, size_data, file);
+  }
+  data[size_data] = '\0';
+  if (size_data_ret != NULL) {
+    *size_data_ret = size_data;
+  }
+  return data;
+}
