@@ -31,6 +31,14 @@
 
 enum XX_KEY {
   XX_KEY_NONE,
+  XX_KEY_1,
+  XX_KEY_2,
+  XX_KEY_3,
+  XX_KEY_4,
+  XX_KEY_5,
+  XX_KEY_6,
+  XX_KEY_7,
+  XX_KEY_8,
   XX_KEY_ESC,
 };
 
@@ -249,6 +257,8 @@ handler_events(void * data)
         case KeyRelease:
           ; // Empty statement.
           XKeyEvent * event_cast = (XKeyEvent *)event_native;
+          KeySym key_sym = XLookupKeysym(event_cast, 0);
+          printf("event: %s\n", XKeysymToString(key_sym));
           if (event_cast->type == KeyPress && previous == XX_EVENT_RELEASE) {
             // Remove the previous release event and skip this one.
             window->index_event_first_empty--;
@@ -365,12 +375,22 @@ xxinput_flush(struct xxWindow * window)
     printf("  [%d]: ", i);
     switch (event->type) {
       case (XX_EVENT_PRESS):
-        printf("Pressed.\n");
+        printf("Pressed %d.\n", event->key);
+        switch (event->key) {
+          case (XX_KEY_ESC):
+            xxwindow_open_set_locked(window, false);
+            break;
+          default:
+            break;
+        }
         window->state_keys_pressed[event->key] = true;
         window->state_keys_time[event->key] = 0;
         break;
       case (XX_EVENT_RELEASE):
-        printf("Released, held for %f ms.\n", window->state_keys_time[event->key]);
+        printf("Released %d, held for %f ms.\n",
+          event->key,
+          window->state_keys_time[event->key]
+        );
         window->state_keys_released[event->key] = true;
         window->state_keys_time[event->key] = 0;
         break;
