@@ -5,14 +5,28 @@
 #include <threads.h>
 #include <sys/select.h>
 #include <time.h>
+#include <dlfcn.h>
 
 #include <stdint.h>
 
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
+
+#include <GL/gl.h>
+#include <GL/glx.h>
 
 #define BUFFER_EVENTS_SIZE 64
 
 #define MSEC(t) t.tv_sec*1e3+t.tv_nsec/1e6
+
+#define xxdlopen(name) dlopen(name, RTLD_LAZY)
+#define xxdlsym(handle, name) dlsym(handle, name)
+#define XXAPI
+
+struct glx {
+  void (* address_proc)(const GLubyte * name_proc);
+  bool (* version)(Display * display, int * major, int * minor);
+};
 
 /*
 #define mtx_lock_org mtx_lock
@@ -56,6 +70,7 @@ struct xxWindow_native {
   Window window;
   XEvent event;
   int screen;
+  struct glx glx;
 };
 
 struct xxEvent {
@@ -346,6 +361,16 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
     }
   }
   mtx_unlock(&window->mutex);
+
+  XXAPI void * h_glx = xxdlopen("libGL.so");
+  struct glx glx = {
+    .version = xxdlsym(h_glx, "glXQueryVersion"),
+  };
+  memcpy(&window->native.glx, &glx, sizeof(struct glx));
+  int major=0, minor=0;
+  window->native.glx.version(window->native.display, &major, &minor);
+  printf("GLX version: %d,%d\n", major, minor);
+
   return window;
 }
 
