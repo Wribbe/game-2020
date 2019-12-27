@@ -302,7 +302,7 @@ handler_events(void * data)
 }
 
 void
-xxwindow_native_create(struct xxWindow * window)
+xxwindow_get_native(struct xxWindow * window)
 {
   struct xxWindow_native * native = &window->native;
   native->display = XOpenDisplay(NULL);
@@ -332,7 +332,7 @@ xxwindow_native_create(struct xxWindow * window)
 }
 
 void
-xxwindow_native_destroy(struct xxWindow * window)
+xxwindow_destroy_native(struct xxWindow * window)
 {
   XCloseDisplay(window->native.display);
 }
@@ -352,7 +352,7 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
 
   mtx_init(&window->mutex, mtx_plain);
   cnd_init(&window->condition);
-  xxwindow_native_create(window);
+  xxwindow_get_native(window);
   mtx_lock(&window->mutex);
   thrd_create(&window->thread_input, handler_events, (void *)window);
   while (true) {
@@ -433,7 +433,7 @@ xxinput_flush(struct xxWindow * window)
 }
 
 void
-xxwindow_terminate(struct xxWindow * window)
+xxwindow_destroy(struct xxWindow * window)
 {
   if (xxwindow_open_get(window)) {
     xxwindow_open_set(window, false);
@@ -441,7 +441,7 @@ xxwindow_terminate(struct xxWindow * window)
   thrd_join(window->thread_input, NULL);
   mtx_destroy(&window->mutex);
   cnd_destroy(&window->condition);
-  xxwindow_native_destroy(window);
+  xxwindow_destroy_native(window);
   free(window);
 }
 

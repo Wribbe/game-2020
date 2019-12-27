@@ -11,5 +11,5 @@ main(void)
       xxwindow_open_set(window, false);
     }
   }
-  xxwindow_terminate(window);
+  xxwindow_destroy(window);
 }
