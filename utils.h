@@ -26,6 +26,7 @@
 struct glx {
   void (* address_proc)(const GLubyte * name_proc);
   bool (* version)(Display * display, int * major, int * minor);
+  GLXFBConfig * (* configs)(Display * display, int screen, int * num_elements);
 };
 
 /*
@@ -337,6 +338,14 @@ xxwindow_destroy_native(struct xxWindow * window)
   XCloseDisplay(window->native.display);
 }
 
+int
+glx_attribute_get(GLXFBConfig config, Display * display, int attribute)
+{
+  int value;
+  glXGetFBConfigAttrib(display, config, attribute, &value);
+  return value;
+}
+
 struct xxWindow *
 xxwindow_get(const char * name, uint32_t width, uint32_t height)
 {
@@ -350,9 +359,44 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
   window->time_last_flush.tv_sec = 0;
   window->time_last_flush.tv_nsec = 0;
 
+  xxwindow_get_native(window);
+
+  XXAPI void * h_glx = xxdlopen("libGL.so");
+  struct glx glx = {
+    .version = xxdlsym(h_glx, "glXQueryVersion"),
+    .configs = xxdlsym(h_glx, "glXGetFBConfigs")
+  };
+  memcpy(&window->native.glx, &glx, sizeof(struct glx));
+  int major=0, minor=0;
+  window->native.glx.version(window->native.display, &major, &minor);
+  printf("GLX version: %d,%d\n", major, minor);
+
+  int num_configs = 0;
+  GLXFBConfig * configs = glx.configs(
+    window->native.display,
+    window->native.screen,
+    &num_configs
+  );
+  for (int i=0; i<num_configs; i++, configs++) {
+    GLXFBConfig config = *configs;
+    printf(
+       "red: %d,"
+       "green: %d,"
+       "blue: %d,"
+       "alpha: %d,"
+       "depth: %d"
+       "\n"
+    ,
+      glx_attribute_get(config, window->native.display, GLX_RED_SIZE),
+      glx_attribute_get(config, window->native.display, GLX_GREEN_SIZE),
+      glx_attribute_get(config, window->native.display, GLX_BLUE_SIZE),
+      glx_attribute_get(config, window->native.display, GLX_ALPHA_SIZE),
+      glx_attribute_get(config, window->native.display, GLX_DEPTH_SIZE)
+    );
+  }
+
   mtx_init(&window->mutex, mtx_plain);
   cnd_init(&window->condition);
-  xxwindow_get_native(window);
   mtx_lock(&window->mutex);
   thrd_create(&window->thread_input, handler_events, (void *)window);
   while (true) {
@@ -361,15 +405,6 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
     }
   }
   mtx_unlock(&window->mutex);
-
-  XXAPI void * h_glx = xxdlopen("libGL.so");
-  struct glx glx = {
-    .version = xxdlsym(h_glx, "glXQueryVersion"),
-  };
-  memcpy(&window->native.glx, &glx, sizeof(struct glx));
-  int major=0, minor=0;
-  window->native.glx.version(window->native.display, &major, &minor);
-  printf("GLX version: %d,%d\n", major, minor);
 
   return window;
 }
