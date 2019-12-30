@@ -18,6 +18,7 @@
 #define BUFFER_EVENTS_SIZE 64
 
 #define MSEC(t) t.tv_sec*1e3+t.tv_nsec/1e6
+#define LEN(array) (sizeof array)/(sizeof array[0])
 
 #define xxdlopen(name) dlopen(name, RTLD_LAZY)
 #define xxdlsym(handle, name) dlsym(handle, name)
@@ -339,10 +340,20 @@ xxwindow_destroy_native(struct xxWindow * window)
 }
 
 int
-glx_attribute_get(GLXFBConfig config, Display * display, int attribute)
+glx_attribute_get(GLXFBConfig config, struct xxWindow * window, int attribute)
 {
   int value;
-  glXGetFBConfigAttrib(display, config, attribute, &value);
+  glXGetFBConfigAttrib(window->native.display, config, attribute, &value);
+  switch(attribute) {
+    case GLX_DRAWABLE_TYPE:
+      return value & GLX_WINDOW_BIT;
+      break;
+    case GLX_X_VISUAL_TYPE:
+      return value == GLX_TRUE_COLOR;
+      break;
+    default:
+      break;
+  }
   return value;
 }
 
@@ -371,29 +382,39 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
   window->native.glx.version(window->native.display, &major, &minor);
   printf("GLX version: %d,%d\n", major, minor);
 
+  int attributes[] = {
+    // Should always be true.
+    GLX_X_RENDERABLE,
+    GLX_DOUBLEBUFFER,
+    GLX_DRAWABLE_TYPE,
+    GLX_X_VISUAL_TYPE,
+    // Should be largest value.
+    GLX_RED_SIZE,
+    GLX_GREEN_SIZE,
+    GLX_BLUE_SIZE,
+    GLX_ALPHA_SIZE,
+    GLX_DEPTH_SIZE,
+    GLX_SAMPLES,
+  };
   int num_configs = 0;
   GLXFBConfig * configs = glx.configs(
     window->native.display,
     window->native.screen,
     &num_configs
   );
-  for (int i=0; i<num_configs; i++, configs++) {
-    GLXFBConfig config = *configs;
-    printf(
-       "red: %d,"
-       "green: %d,"
-       "blue: %d,"
-       "alpha: %d,"
-       "depth: %d"
-       "\n"
-    ,
-      glx_attribute_get(config, window->native.display, GLX_RED_SIZE),
-      glx_attribute_get(config, window->native.display, GLX_GREEN_SIZE),
-      glx_attribute_get(config, window->native.display, GLX_BLUE_SIZE),
-      glx_attribute_get(config, window->native.display, GLX_ALPHA_SIZE),
-      glx_attribute_get(config, window->native.display, GLX_DEPTH_SIZE)
-    );
+  int results[LEN(attributes)] = {0};
+  for (int i=0; i<num_configs; i++) {
+    GLXFBConfig config = *(configs+i);
+    for (int j=0; j<LEN(attributes); j++) {
+      int value = glx_attribute_get(config, window, attributes[j]);
+      if (value >= results[j]) {
+        results[j] = value;
+      } else {
+        break;
+      }
+    }
   }
+  XFree(configs);
 
   mtx_init(&window->mutex, mtx_plain);
   cnd_init(&window->condition);
