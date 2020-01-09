@@ -6,6 +6,7 @@
 #include <sys/select.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <unistd.h>
 
 #include <stdint.h>
 
@@ -24,10 +25,22 @@
 #define xxdlsym(handle, name) dlsym(handle, name)
 #define XXAPI
 
+typedef GLXContext
+(* fp_context)(
+  Display * display,
+  GLXFBConfig config,
+  GLXContext share_context,
+  bool direct,
+  const int * attrib_list
+);
+typedef void (* ret_address_proc)(void);
+
 struct glx {
-  void (* address_proc)(const GLubyte * name_proc);
   bool (* version)(Display * display, int * major, int * minor);
   GLXFBConfig * (* configs)(Display * display, int screen, int * num_elements);
+  ret_address_proc (* address_proc)(const GLubyte * name_proc);
+  fp_context context;
+  void (* swap)(Display * display, GLXDrawable draw);
 };
 
 /*
@@ -39,9 +52,9 @@ struct glx {
   mtx_lock_org(lock); \
   printf("Locked mutex in %s\n", __func__);
 
-#define mtx_unlock(unlock) \
+#define mtx_unlock(lock) \
   printf("Unlocking mutex in %s\n", __func__); \
-  mtx_unlock_org(unlock); \
+  mtx_unlock_org(lock); \
   printf("Unlocked mutex in %s\n", __func__);
 */
 
@@ -70,8 +83,12 @@ enum XX_EVENT_TYPE {
 struct xxWindow_native {
   Display * display;
   Window window;
-  XEvent event;
   int screen;
+  XEvent event;
+  GLXContext context;
+  Colormap colormap;
+  Visual * visual;
+  int depth;
   struct glx glx;
 };
 
@@ -225,6 +242,42 @@ xxinput_event_to_string(XEvent * event)
   }
 }
 
+int
+glx_attribute_abs(int attribute, int value, bool attrib_get)
+{
+  switch(attribute) {
+    case GLX_DRAWABLE_TYPE:
+      if (attrib_get) {
+        return value & GLX_WINDOW_BIT;
+      } else {
+        return GLX_WINDOW_BIT;
+      }
+      break;
+    case GLX_X_VISUAL_TYPE:
+      if (attrib_get) {
+        return value == GLX_TRUE_COLOR;
+      } else {
+        return GLX_TRUE_COLOR;
+      }
+      break;
+    default:
+      break;
+  }
+  return value;
+}
+
+int
+glx_attribute_get(GLXFBConfig * config, struct xxWindow * window, int attribute) {
+  int value;
+  glXGetFBConfigAttrib(window->native.display, *config, attribute, &value);
+  return glx_attribute_abs(attribute, value, true);
+}
+
+int
+glx_attribute_get_listvalue(int attribute, int value)
+{
+  return glx_attribute_abs(attribute, value, false);
+}
 
 int
 handler_events(void * data)
@@ -252,7 +305,7 @@ handler_events(void * data)
 
     select(x11_fd+1, &in_fds, NULL, NULL, &tv);
 
-    enum XX_EVENT_TYPE previous = XX_EVENT_NONE;
+    XKeyEvent previous = {0};
     mtx_lock(&window->mutex);
     while(XPending(window->native.display)) {
       XNextEvent(window->native.display, &window->native.event);
@@ -261,38 +314,46 @@ handler_events(void * data)
         break;
       }
       struct xxEvent * event = &window->buffer_events[
-        window->index_event_first_empty
+        window->index_event_first_empty++
       ];
       XEvent * event_native = &window->native.event;
+      XKeyEvent * event_cast = NULL;
       switch(event_native->type) {
         case DestroyNotify:
           event->key = XX_KEY_NONE;
           event->type = XX_EVENT_WINDOW_CLOSE;
-          window->index_event_first_empty++;
           break;
         case KeyPress:
         case KeyRelease:
           ; // Empty statement.
-          XKeyEvent * event_cast = (XKeyEvent *)event_native;
-          KeySym key_sym = XLookupKeysym(event_cast, 0);
-          printf("event: %s\n", XKeysymToString(key_sym));
-          if (event_cast->type == KeyPress && previous == XX_EVENT_RELEASE) {
-            // Remove the previous release event and skip this one.
-            window->index_event_first_empty--;
+          event_cast = (XKeyEvent *)event_native;
+//          KeySym key_sym = XLookupKeysym(event_cast, 0);
+          if (
+            previous.serial == event_cast->serial &&
+            previous.keycode == event_cast->keycode &&
+            previous.type == KeyRelease &&
+            event_cast->type == KeyPress
+          ) {
+            // Repeated event, remove last and skip this one.
+            window->index_event_first_empty -= 2;
             continue;
           }
+//          printf("event: %s\n", XKeysymToString(key_sym));
           event->key = event_cast->keycode;
           if (event_cast->type == KeyPress) {
             event->type = XX_EVENT_PRESS;
           } else {
             event->type = XX_EVENT_RELEASE;
           }
-          previous = event->type;
-          window->index_event_first_empty++;
           break;
         default:
           printf("Event type %d not matched.\n", window->native.event.type);
           break;
+      }
+      if (event_cast != NULL) {
+        previous.serial = event_cast->serial;
+        previous.keycode = event_cast->keycode;
+        previous.type = event_cast->type;
       }
     }
     mtx_unlock(&window->mutex);
@@ -312,71 +373,15 @@ xxwindow_get_native(struct xxWindow * window)
     printf("Could not open display!\n");
   }
   native->screen = DefaultScreen(native->display);
-  native->window = XCreateSimpleWindow(
-    native->display,
-    RootWindow(native->display, native->screen),
-    10,
-    10,
-    window->height,
-    window->width,
-    1,
-    BlackPixel(native->display, native->screen),
-    WhitePixel(native->display, native->screen)
-  );
-  XSelectInput(
-    native->display,
-    native->window,
-    ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask | \
-    EnterWindowMask | LeaveWindowMask
-  );
-  XMapWindow(native->display, native->window);
-  XFlush(native->display);
-}
-
-void
-xxwindow_destroy_native(struct xxWindow * window)
-{
-  XCloseDisplay(window->native.display);
-}
-
-int
-glx_attribute_get(GLXFBConfig config, struct xxWindow * window, int attribute)
-{
-  int value;
-  glXGetFBConfigAttrib(window->native.display, config, attribute, &value);
-  switch(attribute) {
-    case GLX_DRAWABLE_TYPE:
-      return value & GLX_WINDOW_BIT;
-      break;
-    case GLX_X_VISUAL_TYPE:
-      return value == GLX_TRUE_COLOR;
-      break;
-    default:
-      break;
-  }
-  return value;
-}
-
-struct xxWindow *
-xxwindow_get(const char * name, uint32_t width, uint32_t height)
-{
-  struct xxWindow * window = malloc(sizeof(struct xxWindow));
-
-  window->name = name;
-  window->width = width;
-  window->height = height;
-  window->open = true;
-  window->index_event_first_empty = 0;
-  window->time_last_flush.tv_sec = 0;
-  window->time_last_flush.tv_nsec = 0;
-
-  xxwindow_get_native(window);
 
   XXAPI void * h_glx = xxdlopen("libGL.so");
   struct glx glx = {
     .version = xxdlsym(h_glx, "glXQueryVersion"),
-    .configs = xxdlsym(h_glx, "glXGetFBConfigs")
+    .configs = xxdlsym(h_glx, "glXGetFBConfigs"),
+    .address_proc = xxdlsym(h_glx, "glXGetProcAddressARB"),
+    .swap = xxdlsym(h_glx, "glXSwapBuffers"),
   };
+  glx.context = (fp_context)glx.address_proc((const GLubyte*)"glXCreateContextAttribsARB");
   memcpy(&window->native.glx, &glx, sizeof(struct glx));
   int major=0, minor=0;
   window->native.glx.version(window->native.display, &major, &minor);
@@ -394,7 +399,6 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
     GLX_BLUE_SIZE,
     GLX_ALPHA_SIZE,
     GLX_DEPTH_SIZE,
-    GLX_SAMPLES,
   };
   int num_configs = 0;
   GLXFBConfig * configs = glx.configs(
@@ -404,17 +408,122 @@ xxwindow_get(const char * name, uint32_t width, uint32_t height)
   );
   int results[LEN(attributes)] = {0};
   for (int i=0; i<num_configs; i++) {
-    GLXFBConfig config = *(configs+i);
     for (int j=0; j<LEN(attributes); j++) {
-      int value = glx_attribute_get(config, window, attributes[j]);
+      int value = glx_attribute_get((configs+i), window, attributes[j]);
       if (value >= results[j]) {
         results[j] = value;
       } else {
-        break;
+        for (; j<LEN(attributes); j++) {
+          results[j] = -1;
+        }
       }
     }
   }
   XFree(configs);
+
+  int list_attributes[LEN(results)*2+1] = {None};
+  for (int i=0; i<LEN(results); i++) {
+    list_attributes[i*2] = attributes[i];
+    list_attributes[i*2+1] = glx_attribute_get_listvalue(attributes[i], results[i]);
+  }
+
+  GLXFBConfig * configs_matching = glXChooseFBConfig(
+    window->native.display,
+    window->native.screen,
+    list_attributes,
+    &num_configs
+  );
+  printf("Matching configs: %d\n", num_configs);
+  for (int i=0; i<num_configs; i++) {
+    for (int j=0; j<LEN(attributes); j++) {
+      printf(
+        "%d, ",
+        glx_attribute_get(configs_matching+i, window, attributes[j])
+      );
+    }
+    printf("\n");
+  }
+
+  native->context = glx.context(
+    native->display,
+    configs_matching[0],
+    NULL,
+    True,
+    (int[]){
+      GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
+      GLX_CONTEXT_MINOR_VERSION_ARB, 3,
+      None,
+    }
+  );
+
+  XVisualInfo * visual_info = glXGetVisualFromFBConfig(
+    native->display,
+    configs_matching[0]
+  );
+  native->visual = visual_info->visual;
+  native->depth = visual_info->depth;
+
+  XFree(visual_info);
+  XFree(configs_matching);
+
+  native->colormap = XCreateColormap(
+    native->display,
+    RootWindow(native->display, native->screen),
+    native->visual,
+    AllocNone
+  );
+  XSetWindowAttributes attribs_window = {
+    .border_pixel = 0,
+    .colormap = native->colormap,
+  };
+
+  native->window = XCreateWindow(
+    native->display,
+    RootWindow(native->display, native->screen),
+    0,
+    0,
+    window->height,
+    window->width,
+    0, // width-border.
+    native->depth,
+    InputOutput, // class.
+    native->visual,
+    CWBorderPixel | CWColormap,
+    &attribs_window
+  );
+
+  glXMakeCurrent(native->display, native->window, native->context);
+
+  XSelectInput(
+    native->display,
+    native->window,
+    ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask | \
+    EnterWindowMask | LeaveWindowMask
+  );
+  XMapWindow(native->display, native->window);
+  XFlush(native->display);
+}
+
+void
+xxwindow_destroy_native(struct xxWindow * window)
+{
+  XCloseDisplay(window->native.display);
+}
+
+struct xxWindow *
+xxwindow_get(const char * name, uint32_t width, uint32_t height)
+{
+  struct xxWindow * window = malloc(sizeof(struct xxWindow));
+
+  window->name = name;
+  window->width = width;
+  window->height = height;
+  window->open = true;
+  window->index_event_first_empty = 0;
+  window->time_last_flush.tv_sec = 0;
+  window->time_last_flush.tv_nsec = 0;
+
+  xxwindow_get_native(window);
 
   mtx_init(&window->mutex, mtx_plain);
   cnd_init(&window->condition);
@@ -441,11 +550,12 @@ xxinput_flush(struct xxWindow * window)
 
   struct timespec current = {0};
   double msec_prev = MSEC(window->time_last_flush);
-  clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &current);
+  clock_gettime(CLOCK_REALTIME, &current);
   double msec_curr = MSEC(current);
   double msec_diff = msec_curr - msec_prev;
   window->time_last_flush.tv_sec = current.tv_sec;
   window->time_last_flush.tv_nsec = current.tv_nsec;
+//  printf("%f, %f -- %f\n", msec_curr, msec_prev, msec_diff);
 
   // Add diff to all timers.
   for (int i=0; i<XX_KEY_SIZE; i++) {

@@ -10,6 +10,11 @@ main(void)
       printf("Escape was pressed!\n");
       xxwindow_open_set(window, false);
     }
+    //mtx_lock(&window->mutex);
+    glClearColor(0, 0.5, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    window->native.glx.swap(window->native.display, window->native.window);
+    //mtx_unlock(&window->mutex);
   }
   xxwindow_destroy(window);
 }
