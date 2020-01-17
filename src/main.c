@@ -4,6 +4,7 @@ int
 main(void)
 {
   struct xxWindow * window = xxwindow_get("name", 600, 800);
+  glXMakeCurrent(window->native.display, window->native.window, window->native.context);
   while (xxwindow_open_get(window)) {
     xxinput_flush(window);
     if (xxinput_released(window, XX_KEY_ESC)) {

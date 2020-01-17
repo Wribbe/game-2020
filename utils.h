@@ -122,6 +122,9 @@ struct xxWindow {
   struct xxWindow_native native;
 };
 
+void
+xxwindow_destroy_native(struct xxWindow * window);
+
 bool
 xxwindow_open_get(struct xxWindow * window)
 {
@@ -326,10 +329,16 @@ handler_events(void * data)
       ];
       XEvent * event_native = &window->native.event;
       XKeyEvent * event_cast = NULL;
+      printf(
+        "Event type %d-->%s.\n",
+        window->native.event.type,
+        xxinput_event_to_string(&window->native.event)
+      );
       switch(event_native->type) {
         case DestroyNotify:
           event->key = XX_KEY_NONE;
           event->type = XX_EVENT_WINDOW_CLOSE;
+          xxwindow_destroy_native(window);
           break;
         case KeyPress:
         case KeyRelease:
@@ -374,12 +383,14 @@ handler_events(void * data)
       break;
     }
   }
+  printf("Event handler bailed..\n");
   return 0;
 }
 
 void
 xxwindow_get_native(struct xxWindow * window)
 {
+  XInitThreads();
   struct xxWindow_native * native = &window->native;
   native->display = XOpenDisplay(NULL);
   if (native->display == NULL) {
@@ -507,7 +518,7 @@ xxwindow_get_native(struct xxWindow * window)
     &attribs_window
   );
 
-  glXMakeCurrent(native->display, native->window, native->context);
+//  glXMakeCurrent(native->display, native->window, native->context);
 
   XSelectInput(
     native->display,
@@ -523,9 +534,10 @@ xxwindow_get_native(struct xxWindow * window)
 void
 xxwindow_destroy_native(struct xxWindow * window)
 {
+  printf("We don't get here do we?\n");
   glXMakeContextCurrent(window->native.display, None, None, NULL);
   glXDestroyWindow(window->native.display, window->native.window);
-  window->native.glx.context_destroy(window->native.display, window->native.context);
+//  window->native.glx.context_destroy(window->native.display, window->native.context);
   XCloseDisplay(window->native.display);
 }
 
