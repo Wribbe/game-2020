@@ -33,6 +33,12 @@ typedef GLXContext
   bool direct,
   const int * attrib_list
 );
+typedef void
+(* fp_swapinterval)(
+  Display * display,
+  GLXDrawable drawable,
+  int interval
+);
 typedef void (* ret_address_proc)(void);
 
 struct glx {
@@ -41,6 +47,8 @@ struct glx {
   ret_address_proc (* address_proc)(const GLubyte * name_proc);
   fp_context context;
   void (* swap)(Display * display, GLXDrawable draw);
+  fp_swapinterval swapinterval_set;
+  void (* context_destroy)(Display * display, GLXContext ctx);
 };
 
 /*
@@ -347,7 +355,12 @@ handler_events(void * data)
           }
           break;
         default:
-          printf("Event type %d not matched.\n", window->native.event.type);
+          printf(
+            "Event type %d-->%s not matched.\n",
+            window->native.event.type,
+            xxinput_event_to_string(&window->native.event)
+          );
+          window->index_event_first_empty--;
           break;
       }
       if (event_cast != NULL) {
@@ -380,8 +393,10 @@ xxwindow_get_native(struct xxWindow * window)
     .configs = xxdlsym(h_glx, "glXGetFBConfigs"),
     .address_proc = xxdlsym(h_glx, "glXGetProcAddressARB"),
     .swap = xxdlsym(h_glx, "glXSwapBuffers"),
+    .context_destroy = xxdlsym(h_glx, "glxDestroyContext"),
   };
   glx.context = (fp_context)glx.address_proc((const GLubyte*)"glXCreateContextAttribsARB");
+  glx.swapinterval_set = (fp_swapinterval)glx.address_proc((const GLubyte*)"glXSwapIntervalEXT");
   memcpy(&window->native.glx, &glx, sizeof(struct glx));
   int major=0, minor=0;
   window->native.glx.version(window->native.display, &major, &minor);
@@ -500,6 +515,7 @@ xxwindow_get_native(struct xxWindow * window)
     ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask | \
     EnterWindowMask | LeaveWindowMask
   );
+  native->glx.swapinterval_set(native->display, native->window, 30);
   XMapWindow(native->display, native->window);
   XFlush(native->display);
 }
@@ -507,6 +523,9 @@ xxwindow_get_native(struct xxWindow * window)
 void
 xxwindow_destroy_native(struct xxWindow * window)
 {
+  glXMakeContextCurrent(window->native.display, None, None, NULL);
+  glXDestroyWindow(window->native.display, window->native.window);
+  window->native.glx.context_destroy(window->native.display, window->native.context);
   XCloseDisplay(window->native.display);
 }
 
